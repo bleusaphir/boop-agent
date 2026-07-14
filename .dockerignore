@@ -1,0 +1,11 @@
+node_modules
+.git
+.env
+.env.local
+.env.*.local
+data
+debug/dist
+electron
+**/*.log
+.cache
+.DS_Store
