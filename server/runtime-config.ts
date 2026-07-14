@@ -78,16 +78,20 @@ export const RUNTIME_ALIASES: Record<string, RuntimeName> = {
 
 // Backward-compatible names kept for existing imports and prompt text.
 export const MODEL_ALIASES: Record<string, string> = {
-  opus: "claude-opus-4-7",
+  opus: "claude-opus-4-8",
+  "opus 4.8": "claude-opus-4-8",
   "opus 4.7": "claude-opus-4-7",
-  sonnet: "claude-sonnet-4-6",
+  sonnet: "claude-sonnet-5",
+  "sonnet 5": "claude-sonnet-5",
   "sonnet 4.6": "claude-sonnet-4-6",
   haiku: "claude-haiku-4-5-20251001",
   "haiku 4.5": "claude-haiku-4-5-20251001",
 };
 
 export const KNOWN_MODELS = new Set<string>([
+  "claude-opus-4-8",
   "claude-opus-4-7",
+  "claude-sonnet-5",
   "claude-sonnet-4-6",
   "claude-haiku-4-5-20251001",
 ]);
@@ -146,7 +150,7 @@ function resolveRuntimeValue(input: string | null): RuntimeName {
 }
 
 function claudeEnvFallback(): string {
-  return process.env.BOOP_MODEL ?? "claude-sonnet-4-6";
+  return process.env.BOOP_MODEL ?? "claude-sonnet-5";
 }
 
 function codexEnvFallback(): string {
