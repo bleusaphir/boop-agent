@@ -19,7 +19,12 @@ COPY . .
 # declaring it ARG makes it available to this RUN. Baking _generated into the
 # image avoids a re-deploy on every container restart.
 ARG CONVEX_DEPLOY_KEY
-RUN CONVEX_DEPLOY_KEY="$CONVEX_DEPLOY_KEY" npx convex deploy
+# --typecheck=disable keeps the build deterministic. typescript is a devDep, absent
+# under --omit=dev; convex's default (--typecheck=try) would emit a "can't find tsc"
+# warning and skip the check anyway, so disabling it explicitly just removes that
+# noise and the dependence on the `try` fallback. Codegen still runs (gated by
+# --codegen, independent of typecheck) and writes convex/_generated.
+RUN CONVEX_DEPLOY_KEY="$CONVEX_DEPLOY_KEY" npx convex deploy --typecheck=disable
 
 # preflight now passes; tsx runs the TS entrypoint. Railway sets PORT; the
 # server reads process.env.PORT and binds 0.0.0.0.
