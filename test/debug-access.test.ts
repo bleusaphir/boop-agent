@@ -75,6 +75,14 @@ describe("debug-access blocked paths", () => {
     expect(isBlockedDebugPath("/api/composio/toolkits")).toBe(false);
     expect(isBlockedDebugPath("/")).toBe(false);
   });
+
+  it("blocks case, percent-encoded, and double-slash variants; fails closed on bad encoding", () => {
+    expect(isBlockedDebugPath("/API/CHAT")).toBe(true);
+    expect(isBlockedDebugPath("/api/%63hat")).toBe(true);
+    expect(isBlockedDebugPath("/api//chat")).toBe(true);
+    expect(isBlockedDebugPath("/api/%zz")).toBe(true); // malformed % → fail closed
+    expect(isBlockedDebugPath("/api/composio/toolkits")).toBe(false);
+  });
 });
 
 describe("debug-access token extraction", () => {

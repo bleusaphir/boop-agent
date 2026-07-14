@@ -10,7 +10,7 @@ export interface DashboardConfig {
 }
 
 function normalizeTeam(raw: string): string {
-  return raw.trim().replace(/^https?:\/\//, "").replace(/\/+$/, "");
+  return raw.trim().replace(/^https?:\/\//i, "").replace(/\/+$/, "");
 }
 
 export function dashboardConfig(): DashboardConfig | null {
@@ -54,7 +54,14 @@ export function isBlockedDebugPath(url: string | undefined): boolean {
   } catch {
     return true; // unparseable → fail closed
   }
-  const normalized = pathname.replace(/\/+$/, "") || "/";
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    return true; // malformed percent-encoding → fail closed
+  }
+  const normalized =
+    decoded.toLowerCase().replace(/\/{2,}/g, "/").replace(/\/+$/, "") || "/";
   return normalized === "/chat" || normalized === "/api/chat";
 }
 
