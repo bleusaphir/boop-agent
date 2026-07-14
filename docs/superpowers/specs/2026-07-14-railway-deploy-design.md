@@ -106,6 +106,10 @@ Requires a Convex Cloud prod deployment and its deploy key. `CONVEX_URL` (runtim
 points the server at that prod deployment (`server/convex-client.ts` reads
 `CONVEX_URL ?? VITE_CONVEX_URL`).
 
+**Fresh, empty prod deployment** — no data migration from any local dev Convex. All
+configuration (runtime, model, enable flags) resolves from env-var fallbacks, so an
+empty `settings` table is fine; memory/drafts start empty and populate at runtime.
+
 ## 6. Railway service configuration
 
 ### 6.1 Environment variables
@@ -116,15 +120,18 @@ points the server at that prod deployment (`server/convex-client.ts` reads
 - `CLAUDE_CODE_OAUTH_TOKEN` — Claude subscription auth for the Agent SDK in headless
   mode (generated via `claude setup-token`). Preferred over `ANTHROPIC_API_KEY`.
 - `BOOP_RUNTIME=claude` — Codex runtime is not viable in the container
+- `BOOP_MODEL=claude-sonnet-5` — default model (Sonnet 5; `$3/$15` per MTok, `$2/$10`
+  intro through 2026-08-31). Env fallback passes through un-gated, so this works as-is;
+  see the runtime-config edit below to also register it as a first-class known model.
 - `SENDBLUE_API_KEY`, `SENDBLUE_API_SECRET`, `SENDBLUE_FROM_NUMBER`
 - `PUBLIC_URL` — `https://<PUBLIC_DOMAIN>` (the custom domain)
 - `BOOP_USER_PHONE` — recipient for proactive notices (single-user assumption)
 - `PORT` — injected by Railway automatically
 
-**Recommended:**
+**Set (decided):**
 - `VOYAGE_API_KEY` **or** `OPENAI_API_KEY` — makes the local embedding model a no-op.
-  Without it, the Transformers.js model re-downloads to ephemeral disk on every
-  deploy (slow cold boot; lost each restart).
+  Decided to set one: without it the Transformers.js model re-downloads to ephemeral
+  disk on every deploy (slow cold boot; lost each restart).
 
 **Optional:**
 - `COMPOSIO_API_KEY` (+ `COMPOSIO_USER_ID`) — only if Composio toolkits are used;
@@ -133,6 +140,19 @@ points the server at that prod deployment (`server/convex-client.ts` reads
 **Fallback / verify during impl:**
 - `ANTHROPIC_API_KEY` — fallback if the SDK does not pick up
   `CLAUDE_CODE_OAUTH_TOKEN` headless (see Risks).
+
+### 6.1a Model registration (small code change)
+
+`server/runtime-config.ts` has a stale `KNOWN_MODELS` set and `MODEL_ALIASES`
+(`claude-opus-4-7` / `claude-sonnet-4-6` / `claude-haiku-4-5-20251001`). `BOOP_MODEL`
+env passes through un-gated, so the deploy default works without this — but to make
+`claude-sonnet-5` a first-class model (recognized by the iMessage `set_model` tool and
+by stored Convex settings), refresh the current generation:
+- `KNOWN_MODELS` → add `claude-sonnet-5`, `claude-opus-4-8` (keep/replace older as desired).
+- `MODEL_ALIASES` → `sonnet` → `claude-sonnet-5`, `opus` → `claude-opus-4-8`.
+- `claudeEnvFallback()` default → `claude-sonnet-5`.
+Token/cost optimization (dispatcher-on-Haiku tiering, prompt-cache audit, etc.) is a
+**separate workstream**, not part of this deploy spec.
 
 ### 6.2 Custom domain
 
@@ -160,6 +180,11 @@ points the server at that prod deployment (`server/convex-client.ts` reads
 2. **Verify DNS + TLS** for the custom domain, then set/confirm `PUBLIC_URL`.
 3. **Smoke test:** `GET https://<PUBLIC_DOMAIN>/health` → 200; then text the Sendblue
    number and confirm a reply.
+
+**Observability:** Railway stdout logs + the Convex dashboard (which shows agent
+tool-calls and logs written to Convex) are the operational view. The debug dashboard is
+deliberately not exposed remotely — exposing it would require loosening `local-access.ts`
+and adding auth, which is out of scope.
 
 ## 8. Prerequisites to prepare during implementation
 
@@ -209,17 +234,22 @@ The maintainer will set these up as part of implementation:
 
 ---
 
-## Appendix — Sub-project 2 decisions already locked (Apple Calendar CalDAV toolkit)
+## Appendix — Sub-project 2 decisions already locked (Apple Calendar + Reminders via CalDAV)
 
 For continuity when we start sub-project 2. Grounded in the codebase; not implemented
 here.
 
-- **Registry contract:** new `IntegrationModule` named `apple-calendar`, registered
-  via `server/integrations/apple-calendar-loader.ts` + two lines in
-  `registry.ts:loadIntegrations()`; tools authored with `defineRuntimeTool`
-  (Zod raw shapes) in `server/apple-calendar/tools.ts`, wrapped by
-  `createClaudeMcpServer`. Mirrors `apple-loader.ts` + `apple/tools.ts`. Separate
-  from the Mac-bound `apple` toolkit (which cannot work headless).
+- **Scope: Calendar + Reminders.** Both are CalDAV on `caldav.icloud.com`, same
+  app-specific-password Basic auth — events are `VEVENT`, reminder lists are `VTODO`.
+  Apple **Notes is excluded** (CloudKit-only, no app-specific-password network path;
+  verified 2026-07-14 against Tasks.org / DAVx5 / home-assistant / Apple docs).
+- **Architecture (option B):** one shared CalDAV client module `server/caldav/`
+  (discovery, Basic auth, PROPFIND/REPORT/PUT/DELETE, If-Match, XML + ICS parsing) with
+  **two thin toolkits on top** — `apple-calendar` (VEVENT) and `apple-reminders`
+  (VTODO). Each is its own `IntegrationModule` + loader + two lines in
+  `registry.ts:loadIntegrations()`; tools authored with `defineRuntimeTool` (Zod raw
+  shapes), wrapped by `createClaudeMcpServer`. Mirrors `apple-loader.ts` +
+  `apple/tools.ts`. Both separate from the Mac-bound `apple` toolkit (headless-dead).
 - **Discovery cache:** store resolved principal / calendar-home URLs in the Convex
   `settings` table (not disk — Railway FS is ephemeral).
 - **Credentials / enable:** iCloud Apple ID + app-specific password in env vars
