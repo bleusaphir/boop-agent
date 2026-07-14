@@ -85,6 +85,10 @@ export async function runClaudeAgent(request: RuntimeRunRequest): Promise<Runtim
       ...(request.mode === "execution" ? { settingSources: ["project"] as const } : {}),
       permissionMode: "bypassPermissions",
       abortController: request.abortController,
+      stderr: (data) => {
+        const line = data.trimEnd();
+        if (line) console.error(`[claude runtime] cli stderr: ${line}`);
+      },
     },
   })) {
     if (msg.type === "assistant") {
