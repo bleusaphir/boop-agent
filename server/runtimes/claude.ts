@@ -113,6 +113,15 @@ export async function runClaudeAgent(request: RuntimeRunRequest): Promise<Runtim
         }
       }
     } else if (msg.type === "result") {
+      if (msg.is_error) {
+        const detail =
+          msg.subtype === "success"
+            ? msg.result
+            : msg.errors.join("; ") || msg.subtype;
+        console.error(
+          `[claude runtime] agent turn failed (model ${request.model}, ${msg.subtype}): ${detail}`,
+        );
+      }
       usage = aggregateUsageFromResult(msg, request.model);
       await request.onUsage?.(usage);
     }
