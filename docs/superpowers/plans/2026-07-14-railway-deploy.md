@@ -321,7 +321,7 @@ inactive on Railway and stays off — do not enable it.
   the OAuth token headless — verify during the first deploy.)
 - An **embeddings key**: `VOYAGE_API_KEY` or `OPENAI_API_KEY` (avoids re-downloading
   the local model to ephemeral disk on every deploy).
-- DNS access for the custom domain (`boop.trame.build`).
+- DNS access for the custom domain (`<PUBLIC_DOMAIN>`).
 
 ## 1. Create the service from the repo
 
@@ -353,7 +353,7 @@ Required:
 | `SENDBLUE_API_KEY` | your Sendblue API key |
 | `SENDBLUE_API_SECRET` | your Sendblue API secret |
 | `SENDBLUE_FROM_NUMBER` | your provisioned Sendblue number |
-| `PUBLIC_URL` | `https://boop.trame.build` |
+| `PUBLIC_URL` | `https://<PUBLIC_DOMAIN>` |
 | `BOOP_USER_PHONE` | your number, for proactive notices |
 
 `PORT` is injected by Railway automatically — do not set it.
@@ -373,10 +373,11 @@ Optional:
 
 ## 4. Custom domain + DNS
 
-- In Railway, add the custom domain `boop.trame.build` to the service; Railway returns
+- In Railway, add the custom domain `<PUBLIC_DOMAIN>` to the service; Railway returns
   a CNAME target.
-- Create a `CNAME` record for `boop` on `trame.build` → Railway's target.
-- Once it resolves with valid TLS, confirm `PUBLIC_URL=https://boop.trame.build`.
+- At your DNS provider, create a `CNAME` record for the `<PUBLIC_DOMAIN>` subdomain
+  pointing to Railway's target.
+- Once it resolves with valid TLS, confirm `PUBLIC_URL=https://<PUBLIC_DOMAIN>`.
 
 ## 5. Deploy
 
@@ -389,12 +390,12 @@ Not auto-registered under `npm start` (only `npm run dev` does that). Do it once
 in the Sendblue dashboard or:
 
 ```bash
-npm run sendblue:webhook -- https://boop.trame.build/sendblue/webhook
+npm run sendblue:webhook -- https://<PUBLIC_DOMAIN>/sendblue/webhook
 ```
 
 ## 7. Smoke test
 
-- `curl https://boop.trame.build/health` → `200`.
+- `curl https://<PUBLIC_DOMAIN>/health` → `200`.
 - Text the Sendblue number; confirm the agent replies over iMessage.
 
 ## Operations
@@ -450,7 +451,7 @@ with:
 - [ ] **Step 4: Verify no real secrets were introduced**
 
 Run: `git diff --cached; git diff .env.example docs/deploy/railway.md`
-Expected: only placeholders (`boop.trame.build` is the user's own domain and acceptable in the runbook per the spec's guidance; no keys, tokens, phone numbers, or `ca_*`/`ntn_*` values).
+Expected: only placeholders — the runbook uses `<PUBLIC_DOMAIN>`, NOT the real domain (per the spec's public-repo policy and the repo `CLAUDE.md`: production URLs are sensitive and must not be committed). The concrete domain lives only in Railway variables. No keys, tokens, phone numbers, or `ca_*`/`ntn_*` values.
 
 - [ ] **Step 5: Commit**
 
@@ -469,7 +470,7 @@ The integration test for the whole sub-project. Requires the prerequisites from 
 
 **Interfaces:**
 - Consumes: `Dockerfile`, `railway.json`, the runbook, and the Railway/Convex/Sendblue accounts.
-- Produces: a live deployment at `https://boop.trame.build`.
+- Produces: a live deployment at `https://<PUBLIC_DOMAIN>`.
 
 - [ ] **Step 1: Push the branch**
 
@@ -488,12 +489,12 @@ Expected: build succeeds; no preflight abort; server boots.
 
 - [ ] **Step 4: Verify health + domain**
 
-Run: `curl -sS -o /dev/null -w "%{http_code}\n" https://boop.trame.build/health`
+Run: `curl -sS -o /dev/null -w "%{http_code}\n" https://<PUBLIC_DOMAIN>/health`
 Expected: `200`. Domain resolves with valid TLS.
 
 - [ ] **Step 5: Register the Sendblue webhook**
 
-Run: `npm run sendblue:webhook -- https://boop.trame.build/sendblue/webhook`
+Run: `npm run sendblue:webhook -- https://<PUBLIC_DOMAIN>/sendblue/webhook`
 Expected: the receive webhook is registered to the Railway domain (verify in the Sendblue dashboard).
 
 - [ ] **Step 6: Verify the iMessage round-trip**
@@ -517,9 +518,9 @@ Expected: `clean` (no real keys, tokens, or phone numbers committed).
 
 - [ ] Railway build succeeds from the committed `Dockerfile`, including `convex deploy`.
 - [ ] Container boots: preflight passes, server listens on `$PORT`.
-- [ ] `GET https://boop.trame.build/health` returns 200.
+- [ ] `GET https://<PUBLIC_DOMAIN>/health` returns 200.
 - [ ] Custom domain resolves with valid TLS; `PUBLIC_URL` matches it.
-- [ ] Sendblue webhook registered to `https://boop.trame.build/sendblue/webhook`.
+- [ ] Sendblue webhook registered to `https://<PUBLIC_DOMAIN>/sendblue/webhook`.
 - [ ] Texting the Sendblue number produces an agent reply over iMessage.
 - [ ] Exactly one replica; schedulers observed firing once.
 - [ ] No real secrets/URLs/phone numbers committed to git.
