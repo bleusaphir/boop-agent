@@ -106,3 +106,36 @@ npm run sendblue:webhook -- https://<PUBLIC_DOMAIN>/sendblue/webhook
 - **If the agent stops responding mid-week:** likely a Claude subscription usage cap on
   `CLAUDE_CODE_OAUTH_TOKEN`. Swap to pay-per-use by setting `ANTHROPIC_API_KEY` (and
   removing the OAuth token if needed) — no code change.
+
+## Troubleshooting (gotchas hit during the first deploy)
+
+- **Agent always replies "Sorry — I hit an error" / logs `Claude Code process exited
+  with code 1`.** The container must run as **non-root**. The Claude Agent SDK passes
+  `--dangerously-skip-permissions` (`permissionMode: "bypassPermissions"`), which the
+  Claude Code CLI refuses under root/sudo. The `Dockerfile` runs as the `node` user for
+  exactly this reason — do not revert that. Tell-tale in the Deploy logs:
+  `[claude runtime] cli stderr: --dangerously-skip-permissions cannot be used with
+  root/sudo privileges`. (This is NOT an auth problem — the token can be perfectly valid.)
+
+- **`POST /sendblue/webhook` returns 401 (`invalid webhook signature`).** The webhook was
+  registered without boop's derived signing secret. boop verifies an `sb-signing-secret`
+  header = `HMAC-SHA256(SENDBLUE_API_SECRET, "boop-sendblue-webhook-v1")`. Register via
+  `npm run sendblue:webhook -- https://<PUBLIC_DOMAIN>/sendblue/webhook` (needs
+  `SENDBLUE_API_KEY`/`SENDBLUE_API_SECRET` in local `.env.local`, matching Railway) — it
+  sets both the URL and the signing secret. Setting the URL by hand in the Sendblue
+  dashboard is NOT enough. Re-run `npm run sendblue:webhook:check` (expect `signingReady:
+  true`).
+
+- **`401 authentication_error: Invalid bearer token` on the model call.** A stray
+  `ANTHROPIC_API_KEY` (even empty) takes precedence over `CLAUDE_CODE_OAUTH_TOKEN` and
+  shadows it. Remove `ANTHROPIC_API_KEY` unless you deliberately want API-key billing
+  with a valid key.
+
+- **Seeing the real error:** `server/runtimes/claude.ts` logs the SDK's actual failure
+  (`[claude runtime] agent turn failed: …` for API/result errors, `[claude runtime] cli
+  stderr: …` for CLI-process crashes) instead of only the opaque "exited with code 1".
+  Look for those lines in the Railway **Deploy logs** (not the HTTP-flow view).
+
+- **Scanner noise (`GET /.env`, `GET /` → 404) in the HTTP logs** is harmless internet
+  background scanning, correctly blocked by the public-route gate. Filter the log view,
+  or front the domain with Cloudflare (Bot Fight Mode + WAF) if you want edge blocking.
