@@ -242,9 +242,14 @@ async function main() {
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
   wss.on("connection", async (ws, request) => {
-    const allowed =
-      isTrustedLocalRequest(request) ||
-      (shouldServeDebugHost(request) && (await isValidAccessRequest(request)));
+    let allowed = false;
+    try {
+      allowed =
+        isTrustedLocalRequest(request) ||
+        (shouldServeDebugHost(request) && (await isValidAccessRequest(request)));
+    } catch {
+      allowed = false;
+    }
     if (!allowed) {
       ws.close(1008, "unauthorized");
       return;
