@@ -10,12 +10,15 @@ WORKDIR /app
 RUN chown node:node /app
 USER node
 
-# Production deps + the dashboard build tools. vite / react / tailwind live in
-# "dependencies" (not devDependencies), so --omit=dev installs everything
-# `npm run build:debug` needs while still dropping electron / electron-builder /
-# vitest / typescript / npm-run-all (dev) and patchright (optional).
+# Install prod deps INCLUDING optional deps. --omit=dev drops electron /
+# electron-builder / vitest / typescript / npm-run-all — build:debug needs none of
+# them (and skipping electron avoids its slow binary download). We must NOT
+# --omit=optional: Vite's bundler (rollup) and esbuild each load a platform-specific
+# native binary (@rollup/rollup-linux-x64-gnu, @esbuild/linux-x64) shipped as
+# OPTIONAL dependencies; omitting them breaks `npm run build:debug` on linux
+# (npm/cli#4828). vite/react/tailwind themselves live in "dependencies".
 COPY --chown=node:node package.json package-lock.json ./
-RUN npm ci --omit=dev --omit=optional
+RUN npm ci --omit=dev
 
 # App source (respects .dockerignore).
 COPY --chown=node:node . .
