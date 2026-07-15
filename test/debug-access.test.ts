@@ -104,18 +104,17 @@ describe("shouldServeDebugHost", () => {
 });
 
 import { beforeAll } from "vitest";
-import { generateKeyPair, SignJWT, type JWTVerifyGetKey, type KeyLike } from "jose";
+import { generateKeyPair, SignJWT, type JWTVerifyGetKey } from "jose";
 import { verifyAccessToken } from "../server/debug-access.js";
 
 describe("verifyAccessToken", () => {
   const ISSUER = "https://myteam.cloudflareaccess.com";
   const AUD = "aud-tag-123";
-  let privateKey: KeyLike;
+  let pair: Awaited<ReturnType<typeof generateKeyPair>>;
   let keySet: JWTVerifyGetKey;
 
   beforeAll(async () => {
-    const pair = await generateKeyPair("RS256");
-    privateKey = pair.privateKey;
+    pair = await generateKeyPair("RS256");
     keySet = async () => pair.publicKey;
   });
 
@@ -126,7 +125,7 @@ describe("verifyAccessToken", () => {
       .setAudience(opts.aud ?? AUD)
       .setIssuedAt()
       .setExpirationTime(opts.expSeconds ?? Math.floor(Date.now() / 1000) + 3600)
-      .sign(privateKey);
+      .sign(pair.privateKey);
   }
 
   it("accepts a valid token", async () => {

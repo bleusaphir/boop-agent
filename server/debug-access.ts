@@ -121,9 +121,13 @@ export async function isValidAccessRequest(req: DebugRequestLike): Promise<boole
   if (!cfg) return false;
   const token = extractAccessToken(req);
   if (!token) return false;
-  return verifyAccessToken(token, {
-    issuer: cfg.issuer,
-    audience: cfg.aud,
-    keySet: remoteKeySet(cfg.certsUrl),
-  });
+  try {
+    return await verifyAccessToken(token, {
+      issuer: cfg.issuer,
+      audience: cfg.aud,
+      keySet: remoteKeySet(cfg.certsUrl),
+    });
+  } catch {
+    return false;
+  }
 }
