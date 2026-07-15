@@ -31,6 +31,10 @@ import {
 } from "./runtime-config.js";
 import { startImageCleanup } from "./images/clean.js";
 import { isPublicServerRequest, isTrustedLocalRequest } from "./local-access.js";
+import {
+  isValidAccessRequest,
+  shouldServeDebugHost,
+} from "./debug-access.js";
 
 async function main() {
   await loadIntegrations();
@@ -56,10 +60,18 @@ async function main() {
   }
 
   const app = express();
-  app.use((req, res, next) => {
+  app.use(async (req, res, next) => {
     if (isPublicServerRequest(req) || isTrustedLocalRequest(req)) {
       next();
       return;
+    }
+    try {
+      if (shouldServeDebugHost(req) && (await isValidAccessRequest(req))) {
+        next();
+        return;
+      }
+    } catch {
+      // fall through to 404 (fail closed)
     }
     res.status(404).json({ error: "not found" });
   });
@@ -189,9 +201,12 @@ async function main() {
 
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
-  wss.on("connection", (ws, request) => {
-    if (!isTrustedLocalRequest(request)) {
-      ws.close(1008, "local connections only");
+  wss.on("connection", async (ws, request) => {
+    const allowed =
+      isTrustedLocalRequest(request) ||
+      (shouldServeDebugHost(request) && (await isValidAccessRequest(request)));
+    if (!allowed) {
+      ws.close(1008, "unauthorized");
       return;
     }
     addClient(ws);
