@@ -2,6 +2,8 @@ import "./env-setup.js";
 import express from "express";
 import cors from "cors";
 import { createServer } from "node:http";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { WebSocketServer } from "ws";
 import { addClient } from "./broadcast.js";
 import { createSendblueRouter } from "./sendblue.js";
@@ -32,6 +34,7 @@ import {
 import { startImageCleanup } from "./images/clean.js";
 import { isPublicServerRequest, isTrustedLocalRequest } from "./local-access.js";
 import {
+  isDashboardRemoteEnabled,
   isValidAccessRequest,
   matchesDashboardHost,
   shouldServeDebugHost,
@@ -214,6 +217,27 @@ async function main() {
       res.status(500).json({ error: String(err) });
     }
   });
+
+  // Serve the built dashboard UI on the debug host only. The gate above has already
+  // rejected any request here that is not CF-Access-authorized, so static files are
+  // never exposed unauthenticated. Registered last so API routes match first.
+  if (isDashboardRemoteEnabled()) {
+    const debugDist = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "../debug/dist",
+    );
+    const serveStatic = express.static(debugDist);
+    app.use((req, res, next) => {
+      if (!matchesDashboardHost(req.headers.host)) {
+        next();
+        return;
+      }
+      serveStatic(req, res, () => {
+        // SPA fallback: unmatched paths return index.html.
+        res.sendFile(path.join(debugDist, "index.html"));
+      });
+    });
+  }
 
   const server = createServer(app);
   const wss = new WebSocketServer({ server, path: "/ws" });
