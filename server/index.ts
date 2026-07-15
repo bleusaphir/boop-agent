@@ -33,6 +33,7 @@ import { startImageCleanup } from "./images/clean.js";
 import { isPublicServerRequest, isTrustedLocalRequest } from "./local-access.js";
 import {
   isValidAccessRequest,
+  matchesDashboardHost,
   shouldServeDebugHost,
 } from "./debug-access.js";
 
@@ -83,8 +84,23 @@ async function main() {
   app.use("/composio/webhook", express.raw({ type: "application/json", limit: "2mb" }));
   app.use(express.json({ limit: "2mb" }));
 
+  // On the debug host the built dashboard calls /api/* — the Vite dev proxy stripped
+  // that prefix in development. Replicate the rewrite so the existing routers match.
+  app.use((req, _res, next) => {
+    if (matchesDashboardHost(req.headers.host) && req.url.startsWith("/api/")) {
+      req.url = req.url.slice(4); // drop the leading "/api"
+    }
+    next();
+  });
+
   app.get("/health", (_req, res) => {
     res.json({ ok: true, service: "boop-agent" });
+  });
+
+  // Parity with the Vite dev plugin: the dashboard header reads the bot number here.
+  // Reached on the debug host as /api/connection-config (rewritten to /connection-config).
+  app.get("/connection-config", (_req, res) => {
+    res.json({ phoneNumber: process.env.SENDBLUE_FROM_NUMBER ?? "" });
   });
 
   app.get("/runtime-config", async (_req, res) => {
