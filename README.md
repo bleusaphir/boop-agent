@@ -24,6 +24,16 @@ No Anthropic or OpenAI API key is required for the agent runtime when using subs
 > **This is a starting point, not a finished product.**
 > It's the architecture I built for my own personal agent, opened up as a template so you can take it, text-enable your own Claude or Codex-backed agent, and extend it however you want. Integrations are plugged in via [Composio](https://composio.dev/?utm_source=chris&utm_medium=youtube&utm_campaign=collab) — drop in an API key and connect Gmail, Slack, GitHub, Linear, Notion, and ~1000 others straight from the debug dashboard.
 
+## What's different in this fork
+
+This fork runs Boop as an **always-on, headless agent deployed on Railway** (no Mac required at runtime) instead of a laptop-tethered process. On top of upstream:
+
+- **[Railway deployment](#deploying-247-on-railway)** — Docker build (Convex codegen + dashboard UI baked into the image), headless Claude auth via `claude setup-token`, hardened public-route gate. Full runbook in [docs/deploy/railway.md](./docs/deploy/railway.md).
+- **[Remote debug dashboard](#remote-debug-dashboard-cloudflare-access)** — the operator dashboard is reachable from anywhere at a dedicated subdomain behind **Cloudflare Access**, with the server independently verifying the Access JWT. Off by default.
+- **Claude Sonnet 5 by default** — `BOOP_MODEL` falls back to `claude-sonnet-5`; `sonnet` / `opus` aliases resolve to the latest generation.
+- **Replies in French by default** — the dispatcher answers the user in French regardless of the incoming language (task artifacts for third parties keep their audience's language). Edit the `Language:` line in `server/interaction-agent.ts` to change this.
+- **Composio connect flow fixed** for the current API (`connectedAccounts.link` — upstream's `initiate` path now returns a 400 from Composio).
+
 ```
  iMessage  →  Sendblue webhook  →  Interaction agent  →  Sub-agents (per task)
                                           │                    │
@@ -315,6 +325,47 @@ Visit `http://localhost:5173` for the debug dashboard (chat, agents, memory, eve
 
 ---
 
+## Deploying 24/7 on Railway
+
+Local dev needs your machine awake and a tunnel up. This fork also runs **headless on [Railway](https://railway.com)** — the agent answers iMessages around the clock, with Convex Cloud as the backend and no Mac in the loop. Everything Mac-local (Electron app, local browser, local Apple connectors) stays off in that mode.
+
+**The complete step-by-step runbook lives in [docs/deploy/railway.md](./docs/deploy/railway.md)** — prerequisites, variables, custom domain/DNS, webhook registration, smoke tests, and a Troubleshooting section covering every gotcha we actually hit. The short version:
+
+1. **Point a Railway service at this repo.** Railway reads `railway.json` and builds the `Dockerfile`: `npm ci --omit=dev` → `npx convex deploy` (generates `convex/_generated` and pushes functions at build time) → `npm run build:debug` (bakes the dashboard UI into the image).
+2. **Headless Claude auth** uses an OAuth token from `claude setup-token` (`CLAUDE_CODE_OAUTH_TOKEN`) — your subscription, no local session needed. Don't set `ANTHROPIC_API_KEY` alongside it unless you want API-key billing: it takes precedence and shadows the token.
+3. **Set the variables** (see the runbook's tables): build-time `CONVEX_DEPLOY_KEY` + `VITE_CONVEX_URL`, runtime `CONVEX_URL`, `CLAUDE_CODE_OAUTH_TOKEN`, `BOOP_RUNTIME=claude`, `BOOP_MODEL=claude-sonnet-5`, Sendblue keys, `PUBLIC_URL`, and an embeddings key.
+4. **Register the Sendblue webhook once**: `npm run sendblue:webhook -- https://<PUBLIC_DOMAIN>/sendblue/webhook`. Setting the URL by hand in the Sendblue dashboard is *not* enough — this script also syncs the signing secret boop verifies on every inbound request.
+5. **Keep it at one replica** (`railway.json` pins `numReplicas: 1`) — the in-process schedulers double-fire if scaled horizontally.
+
+Three gotchas worth knowing before you hit them (details + tell-tale log lines in the runbook):
+
+- **The container must run as non-root.** The Claude Agent SDK passes `--dangerously-skip-permissions`, which the Claude Code CLI refuses under root — every agent turn dies with an opaque `exited with code 1`. The `Dockerfile` runs as the `node` user for exactly this reason; don't revert it.
+- **A stray `ANTHROPIC_API_KEY` (even empty) shadows `CLAUDE_CODE_OAUTH_TOKEN`** → `401 authentication_error` on every model call.
+- **`npm ci` must keep optional deps** — rollup/esbuild ship their platform-native binaries as optional dependencies; `--omit=optional` breaks the dashboard build on Linux.
+
+Only three routes are publicly reachable in production (`GET /health`, `POST /sendblue/webhook`, `POST /composio/webhook`); everything else — including the dashboard API — is denied unless it comes from localhost **or** carries a valid Cloudflare Access token (next section).
+
+### Remote debug dashboard (Cloudflare Access)
+
+The debug dashboard is local-only by design. This fork can additionally serve the **deployed** dashboard at a dedicated subdomain (e.g. `debug.<PUBLIC_DOMAIN>`), protected by two independent barriers:
+
+1. **[Cloudflare Access](https://developers.cloudflare.com/cloudflare-one/policies/access/)** in front of the subdomain — identity-based login (e.g. one-time PIN to your email), policy restricted to you.
+2. **Server-side JWT verification** — the Node server independently validates the `Cf-Access-Jwt-Assertion` header / `CF_Authorization` cookie (JWKS signature, audience, issuer, expiry) on every request, so hitting the Railway origin directly, bypassing Cloudflare, still returns 404.
+
+It is **off unless all three variables are set** — with them unset, production behaves exactly like upstream:
+
+| Variable | Value |
+|---|---|
+| `DASHBOARD_PUBLIC_HOST` | the debug subdomain, e.g. `debug.<PUBLIC_DOMAIN>` |
+| `CF_ACCESS_TEAM_DOMAIN` | `<team>.cloudflareaccess.com` |
+| `CF_ACCESS_AUD` | the Access application's Audience (AUD) tag |
+
+Plus the build variable `VITE_CONVEX_URL` (same value as `CONVEX_URL`) so the dashboard bundle can reach Convex.
+
+Setup (Railway custom domain → proxied CNAME → Access application → variables → redeploy) is in the runbook's [Remote debug dashboard section](./docs/deploy/railway.md#remote-debug-dashboard-optional-cloudflare-access). Known limitations: the `/chat` tester is blocked on the remote host (use the local dashboard), the Apple/Browser panels are non-functional on a headless server, and the Convex data plane is reached directly by the browser (not behind Access).
+
+---
+
 ## Architecture in 30 seconds
 
 ```
@@ -416,12 +467,12 @@ Everything lives in `.env.local` (auto-created by `npm run setup`). See `.env.ex
 
 | Var | Required | Notes |
 |---|---|---|
-| `VITE_CONVEX_URL` | yes | Convex deployment URL for the Vite debug UI. Written by `npx convex dev`; the server falls back to this value locally. |
+| `VITE_CONVEX_URL` | yes | Convex deployment URL for the Vite debug UI. Written by `npx convex dev`; the server falls back to this value locally. On Railway it must also be set as a **build** variable — Vite inlines it into the dashboard bundle at image-build time. |
 | `CONVEX_URL` | optional | Server-only Convex URL override for non-Vite deployments. Leave unset locally to avoid Convex CLI ambiguity warnings. |
 | `SENDBLUE_API_KEY` / `SENDBLUE_API_SECRET` | yes | From your Sendblue dashboard. |
 | `SENDBLUE_FROM_NUMBER` | yes | Your Sendblue-provisioned number. |
 | `BOOP_RUNTIME` | no | `claude` by default. Set `codex` to use local `codex app-server` with the ChatGPT/Codex account from `codex login`. |
-| `BOOP_MODEL` | no | Default `claude-sonnet-4-6`. Used as the fallback when no runtime override is set. The user can switch the model at runtime from iMessage ("use opus", "switch to sonnet") via the `set_model` self-tool — that override is stored in the Convex `settings` table and takes precedence over this env var. |
+| `BOOP_MODEL` | no | Default `claude-sonnet-5` (this fork registers the Claude 5 generation; `sonnet`/`opus` aliases resolve to `claude-sonnet-5`/`claude-opus-4-8`). Used as the fallback when no runtime override is set. The user can switch the model at runtime from iMessage ("use opus", "switch to sonnet") via the `set_model` self-tool — that override is stored in the Convex `settings` table and takes precedence over this env var. |
 | `BOOP_CODEX_MODEL` / `BOOP_CODEX_REASONING_EFFORT` | no | Codex defaults when `BOOP_RUNTIME=codex`. Defaults: `gpt-5.5` and `medium`. |
 | `BOOP_CODEX_AUTH_HOME` | no | Optional path to a Codex home containing `auth.json`; otherwise Boop uses the current `codex login` auth. |
 | `BOOP_BROWSER_ENABLED` | no | Fallback for Local browser use. Default `false`. Runtime settings in Convex take precedence once changed from the dashboard. |
@@ -439,7 +490,11 @@ Everything lives in `.env.local` (auto-created by `npm run setup`). See `.env.ex
 | `VOYAGE_API_KEY` **or** `OPENAI_API_KEY` | optional | Unlocks vector recall. Falls back to substring. |
 | `COMPOSIO_API_KEY` | optional | Enables integrations. Without it, plain chat + memory + automations still work. Get one at [app.composio.dev/developers](https://app.composio.dev/developers?utm_source=chris&utm_medium=youtube&utm_campaign=collab). |
 | `COMPOSIO_USER_ID` | optional | Stable user id Composio keys connections under. Defaults to `boop-default`. |
-| `ANTHROPIC_API_KEY` | optional | Bypass the Claude Code subscription for the Claude runtime. |
+| `ANTHROPIC_API_KEY` | optional | Bypass the Claude Code subscription for the Claude runtime. **Careful on deployed servers:** if set (even empty) it takes precedence over `CLAUDE_CODE_OAUTH_TOKEN` and shadows it. |
+| `CLAUDE_CODE_OAUTH_TOKEN` | deploy | Headless Claude subscription auth for deployed servers (Railway). Generate with `claude setup-token`. Not needed locally — the SDK finds your `claude` login session. |
+| `DASHBOARD_PUBLIC_HOST` | optional | Enables the [remote debug dashboard](#remote-debug-dashboard-cloudflare-access) on this host (e.g. `debug.<PUBLIC_DOMAIN>`). Off unless all three `DASHBOARD_*`/`CF_ACCESS_*` vars are set. |
+| `CF_ACCESS_TEAM_DOMAIN` | optional | Your Cloudflare Zero Trust team domain (`<team>.cloudflareaccess.com`) — JWKS + issuer for Access JWT verification. |
+| `CF_ACCESS_AUD` | optional | The Cloudflare Access application's Audience (AUD) tag the server verifies tokens against. |
 
 ---
 
@@ -583,6 +638,8 @@ Upgrade path when upstream ships changes: open Codex or Claude in the repo and r
 boop-agent/
 ├── server/
 │   ├── index.ts                   # Express + WS + HTTP routes
+│   ├── local-access.ts            # Loopback-only gate for non-public routes
+│   ├── debug-access.ts            # Cloudflare Access JWT verification (remote dashboard)
 │   ├── sendblue.ts                # iMessage webhook, reply, typing indicator
 │   ├── interaction-agent.ts       # Dispatcher
 │   ├── execution-agent.ts         # Sub-agent runner
@@ -640,6 +697,9 @@ boop-agent/
 │   ├── preflight.mjs              # Checks convex/_generated exists before booting
 │   ├── sendblue-sync.mjs          # Pulls phone number from `sendblue lines`
 │   └── sendblue-webhook.mjs       # Registers inbound webhook via Sendblue CLI
+├── Dockerfile                     # Railway image: deps → convex deploy → dashboard build
+├── railway.json                   # Railway build/deploy config (health check, 1 replica)
+├── docs/deploy/railway.md         # Full deployment runbook + troubleshooting
 ├── README.md           ← you are here
 ├── ARCHITECTURE.md
 └── INTEGRATIONS.md
@@ -702,6 +762,9 @@ Every release lists additions under [CHANGELOG.md](./CHANGELOG.md), with `[BREAK
 - Check the server is running: `curl http://localhost:3456/health`
 - Check the Sendblue webhook is pointed at `<public-url>/sendblue/webhook`
 - Watch server logs. Look for `[sendblue]` and `[interaction]` messages.
+
+**Deployed on Railway and something's off** (agent always errors, webhook 401s, auth failures, dashboard 502s).
+- Every deploy gotcha we hit — with the exact tell-tale log lines — is documented in [docs/deploy/railway.md → Troubleshooting](./docs/deploy/railway.md#troubleshooting-gotchas-hit-during-the-first-deploy). The runtime also logs the real underlying error (`[claude runtime] agent turn failed: …` / `[claude runtime] cli stderr: …`) in the Railway Deploy logs instead of only an opaque "exited with code 1".
 
 **Convex errors / `VITE_CONVEX_URL is not set`.**
 - Run `npx convex dev` manually. Ensure `.env.local` has `VITE_CONVEX_URL`; the server can use that locally.
