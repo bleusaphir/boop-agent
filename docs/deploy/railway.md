@@ -139,3 +139,36 @@ npm run sendblue:webhook -- https://<PUBLIC_DOMAIN>/sendblue/webhook
 - **Scanner noise (`GET /.env`, `GET /` → 404) in the HTTP logs** is harmless internet
   background scanning, correctly blocked by the public-route gate. Filter the log view,
   or front the domain with Cloudflare (Bot Fight Mode + WAF) if you want edge blocking.
+
+## Remote debug dashboard (optional, Cloudflare Access)
+
+By default the debug dashboard is local-only. To reach the **deployed** dashboard from
+a browser, expose it at a dedicated subdomain behind Cloudflare Access. The Node server
+independently verifies the Cloudflare Access JWT, so a direct hit on the Railway origin
+is still denied. Leaving any of the three runtime variables unset keeps it fully locked.
+
+1. **Railway — second domain + build var.** Add `<DEBUG_DOMAIN>` (= `debug.<PUBLIC_DOMAIN>`)
+   as a second custom domain on the service; note the CNAME target. Set the build
+   variable `VITE_CONVEX_URL` to the same value as `CONVEX_URL` (it is inlined into the
+   dashboard bundle at build time).
+2. **Cloudflare DNS.** Add a **proxied** CNAME `debug` → the Railway target.
+3. **Cloudflare Zero Trust → Access.** Create a self-hosted Access application for
+   `<DEBUG_DOMAIN>` and a policy that allows only `<YOUR_EMAIL>`. (If you have no Zero
+   Trust organization yet, create one — the free tier covers a single user.)
+4. Copy the application's **Audience (AUD) tag** and your **team domain**
+   (`<team>.cloudflareaccess.com`).
+5. **Railway runtime variables** (all three required):
+   - `DASHBOARD_PUBLIC_HOST=<DEBUG_DOMAIN>`
+   - `CF_ACCESS_TEAM_DOMAIN=<team>.cloudflareaccess.com`
+   - `CF_ACCESS_AUD=<the AUD tag>`
+   Redeploy.
+6. **Verify.** Visiting `<DEBUG_DOMAIN>` redirects to the Access login; after
+   authenticating, the dashboard loads. A request without the token — or straight to the
+   raw Railway origin — returns `404`. If the live-events panel is needed, confirm
+   Cloudflare **WebSockets** are enabled (on by default).
+
+**Known limitations.** The **Apple** and **Browser** panels depend on the local Mac
+bridge / patchright and are non-functional on Railway (they show errors). The `/chat`
+tester is blocked on the debug host (use the local dashboard for that). The Convex data
+plane is reached directly by the browser and is **not** behind Cloudflare Access — see
+the design spec's residual-risk section.
