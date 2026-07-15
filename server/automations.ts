@@ -10,6 +10,13 @@ function randomId(prefix: string): string {
   return `${prefix}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 }
 
+// Sentinel an automation run can emit to mean "nothing worth notifying about,
+// but log the run normally." Only the notification step checks for it; run
+// history always records the (marker-stripped) result regardless.
+const NO_NOTIFY_MARKER = "NO_NOTIFY";
+
+const NO_NOTIFY_INSTRUCTION = `\n\nIf, once you're done, there is nothing worth notifying the user about, end your final response with a new line containing exactly "${NO_NOTIFY_MARKER}" and nothing else after it. Otherwise write your normal report and omit that line.`;
+
 // Both helpers accept an optional IANA timezone — when present, croner
 // evaluates the cron expression in that zone. Without it, croner falls back
 // to the server's local zone, which is almost always wrong for users in a
@@ -55,28 +62,34 @@ async function runAutomation(a: {
 
   try {
     const res = await spawnExecutionAgent({
-      task: `AUTOMATION "${a.name}": ${a.task}`,
+      task: `AUTOMATION "${a.name}": ${a.task}${NO_NOTIFY_INSTRUCTION}`,
       integrations: a.integrations,
       conversationId: a.conversationId,
       name: `auto:${a.name}`,
     });
+
+    const suppressNotify = res.result?.trim().endsWith(NO_NOTIFY_MARKER) ?? false;
+    const cleanResult = suppressNotify
+      ? res.result!.slice(0, res.result!.lastIndexOf(NO_NOTIFY_MARKER)).trim()
+      : res.result;
+
     await convex.mutation(api.automations.updateRun, {
       runId,
       status: res.status === "completed" ? "completed" : "failed",
-      result: res.result,
+      result: cleanResult,
       agentId: res.agentId,
     });
 
-    if (a.notifyConversationId && res.result) {
+    if (a.notifyConversationId && cleanResult && !suppressNotify) {
       if (a.notifyConversationId.startsWith("sms:")) {
         const number = a.notifyConversationId.slice(4);
         const preamble = `[${a.name}]\n\n`;
-        await sendImessage(number, preamble + res.result);
+        await sendImessage(number, preamble + cleanResult);
       }
       await convex.mutation(api.messages.send, {
         conversationId: a.notifyConversationId,
         role: "assistant",
-        content: `[${a.name}]\n\n${res.result}`,
+        content: `[${a.name}]\n\n${cleanResult}`,
       });
     }
 
