@@ -1,39 +1,42 @@
 # syntax=docker/dockerfile:1
 FROM node:20-slim
 
-# Run everything as the built-in non-root `node` user (uid 1000). The Claude Agent
-# SDK passes --dangerously-skip-permissions (from permissionMode: "bypassPermissions"),
-# and the Claude Code CLI REFUSES to run that under root/sudo — so as root every agent
-# turn dies with "Claude Code process exited with code 1". Owning /app as `node` (and
-# a real $HOME) also avoids runtime write-permission issues (tsx, CLI session state).
+# Run everything as the built-in non-root `node` user. The Claude Agent SDK passes
+# --dangerously-skip-permissions (permissionMode: "bypassPermissions"), which the
+# Claude Code CLI REFUSES under root/sudo — as root every agent turn dies with
+# "Claude Code process exited with code 1". Do not revert this.
 ENV HOME=/home/node
 WORKDIR /app
 RUN chown node:node /app
 USER node
 
-# Production dependencies only.
-# --omit=dev      drops electron / electron-builder / vitest / typescript (devDeps)
-# --omit=optional drops patchright (browser integration is off on Railway and is
-#                 only ever imported lazily via import("patchright"), never at boot)
+# FULL install: dev deps (vite, react plugin, tailwind) are needed to build the
+# dashboard UI. They are pruned again after the build (last RUN), so the final image
+# stays lean.
 COPY --chown=node:node package.json package-lock.json ./
-RUN npm ci --omit=dev --omit=optional
+RUN npm ci
 
 # App source (respects .dockerignore).
 COPY --chown=node:node . .
 
-# Convex codegen + function push at BUILD time. This produces convex/_generated,
-# which scripts/preflight.mjs requires and which is gitignored (absent from the
-# build context). CONVEX_DEPLOY_KEY is provided as a Railway build variable;
-# declaring it ARG makes it available to this RUN. Baking _generated into the
-# image avoids a re-deploy on every container restart.
-# --typecheck=disable keeps the build deterministic. typescript is a devDep, absent
-# under --omit=dev; convex's default (--typecheck=try) would emit a "can't find tsc"
-# warning and skip the check anyway, so disabling it explicitly just removes that
-# noise and the dependence on the `try` fallback. Codegen still runs (gated by
-# --codegen, independent of typecheck) and writes convex/_generated.
+# Convex codegen + function push at BUILD time. Produces convex/_generated, which
+# scripts/preflight.mjs requires AND which the dashboard build imports — so this must
+# run BEFORE build:debug. --typecheck=disable keeps the build deterministic (typescript
+# is a dev dep and is about to be pruned anyway).
 ARG CONVEX_DEPLOY_KEY
 RUN CONVEX_DEPLOY_KEY="$CONVEX_DEPLOY_KEY" npx convex deploy --typecheck=disable
 
-# preflight now passes; tsx runs the TS entrypoint. Railway sets PORT; the
-# server reads process.env.PORT and binds 0.0.0.0.
+# Build the dashboard UI. Vite inlines VITE_CONVEX_URL into the bundle so the browser
+# can reach Convex directly; without it the bundle renders a "VITE_CONVEX_URL is not
+# set" error page. Set it to the same value as the runtime CONVEX_URL.
+ARG VITE_CONVEX_URL
+RUN VITE_CONVEX_URL="$VITE_CONVEX_URL" npm run build:debug
+
+# Drop dev + optional deps now that debug/dist is built. jose is a runtime dependency
+# (not a dev dep), so it survives. patchright (optional), electron/vitest/typescript
+# (dev) are removed.
+RUN npm prune --omit=dev --omit=optional
+
+# preflight passes (convex/_generated present); tsx runs the TS entrypoint. Railway
+# sets PORT; the server reads process.env.PORT and binds 0.0.0.0.
 CMD ["npm", "start"]
