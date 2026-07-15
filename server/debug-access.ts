@@ -1,4 +1,5 @@
 import type { IncomingMessage } from "node:http";
+import { createRemoteJWKSet, jwtVerify, type JWTVerifyGetKey } from "jose";
 
 export type DebugRequestLike = Pick<IncomingMessage, "headers" | "url">;
 
@@ -88,4 +89,41 @@ export function shouldServeDebugHost(req: DebugRequestLike): boolean {
     matchesDashboardHost(req.headers.host) &&
     !isBlockedDebugPath(req.url)
   );
+}
+
+export async function verifyAccessToken(
+  token: string,
+  opts: { issuer: string; audience: string; keySet: JWTVerifyGetKey },
+): Promise<boolean> {
+  try {
+    await jwtVerify(token, opts.keySet, {
+      issuer: opts.issuer,
+      audience: opts.audience,
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let cachedKeySet: JWTVerifyGetKey | null = null;
+let cachedCertsUrl: string | null = null;
+function remoteKeySet(certsUrl: string): JWTVerifyGetKey {
+  if (!cachedKeySet || cachedCertsUrl !== certsUrl) {
+    cachedKeySet = createRemoteJWKSet(new URL(certsUrl));
+    cachedCertsUrl = certsUrl;
+  }
+  return cachedKeySet;
+}
+
+export async function isValidAccessRequest(req: DebugRequestLike): Promise<boolean> {
+  const cfg = dashboardConfig();
+  if (!cfg) return false;
+  const token = extractAccessToken(req);
+  if (!token) return false;
+  return verifyAccessToken(token, {
+    issuer: cfg.issuer,
+    audience: cfg.aud,
+    keySet: remoteKeySet(cfg.certsUrl),
+  });
 }

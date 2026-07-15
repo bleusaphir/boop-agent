@@ -102,3 +102,47 @@ describe("shouldServeDebugHost", () => {
     expect(shouldServeDebugHost(req({ host: "boop.example.com" }, "/api/runtime-config"))).toBe(false);
   });
 });
+
+import { beforeAll } from "vitest";
+import { generateKeyPair, SignJWT, type JWTVerifyGetKey, type KeyLike } from "jose";
+import { verifyAccessToken } from "../server/debug-access.js";
+
+describe("verifyAccessToken", () => {
+  const ISSUER = "https://myteam.cloudflareaccess.com";
+  const AUD = "aud-tag-123";
+  let privateKey: KeyLike;
+  let keySet: JWTVerifyGetKey;
+
+  beforeAll(async () => {
+    const pair = await generateKeyPair("RS256");
+    privateKey = pair.privateKey;
+    keySet = async () => pair.publicKey;
+  });
+
+  async function sign(opts: { issuer?: string; aud?: string; expSeconds?: number }) {
+    return new SignJWT({})
+      .setProtectedHeader({ alg: "RS256" })
+      .setIssuer(opts.issuer ?? ISSUER)
+      .setAudience(opts.aud ?? AUD)
+      .setIssuedAt()
+      .setExpirationTime(opts.expSeconds ?? Math.floor(Date.now() / 1000) + 3600)
+      .sign(privateKey);
+  }
+
+  it("accepts a valid token", async () => {
+    expect(await verifyAccessToken(await sign({}), { issuer: ISSUER, audience: AUD, keySet })).toBe(true);
+  });
+  it("rejects an expired token", async () => {
+    const tok = await sign({ expSeconds: Math.floor(Date.now() / 1000) - 60 });
+    expect(await verifyAccessToken(tok, { issuer: ISSUER, audience: AUD, keySet })).toBe(false);
+  });
+  it("rejects a wrong audience", async () => {
+    expect(await verifyAccessToken(await sign({ aud: "other" }), { issuer: ISSUER, audience: AUD, keySet })).toBe(false);
+  });
+  it("rejects a wrong issuer", async () => {
+    expect(await verifyAccessToken(await sign({ issuer: "https://evil.example" }), { issuer: ISSUER, audience: AUD, keySet })).toBe(false);
+  });
+  it("rejects garbage", async () => {
+    expect(await verifyAccessToken("not-a-jwt", { issuer: ISSUER, audience: AUD, keySet })).toBe(false);
+  });
+});
